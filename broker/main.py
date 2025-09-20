@@ -1,7 +1,7 @@
 # main.py
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Query
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from typing import Dict, Any
+from typing import Dict, Any, List
 import uuid
 import jwt
 from datetime import datetime, timedelta, timezone
@@ -118,6 +118,18 @@ async def submit_intent(intent: Intent, agent_id: str = Depends(get_current_agen
     
     return {"status": "Intent received", "transaction_id": intent.transaction_id}
 
+@app.get("/get_intents", tags=["Agent Protocol"])
+async def get_intents(agent_id: str = Depends(get_current_agent_id)):
+    """
+    Endpoint for a Bank Agent to poll for new loan intents.
+    Returns a list of all intents that have been submitted.
+    """
+    scopes = SCOPES_MAP.get(agent_id, [])
+    if "bank:read" not in scopes:
+        raise HTTPException(status_code=403, detail="Not authorized to read intents")
+        
+    return list(intents_db.values())
+
 
 @app.post("/submit_proposal", tags=["Agent Protocol"])
 async def submit_proposal(proposal: Proposal, agent_id: str = Depends(get_current_agent_id)):
@@ -141,8 +153,8 @@ async def submit_proposal(proposal: Proposal, agent_id: str = Depends(get_curren
 @app.get("/get_proposals/{transaction_id}", tags=["Agent Protocol"])
 async def get_proposals(transaction_id: str, agent_id: str = Depends(get_current_agent_id)):
     """
-    Endpoint for a Consumer Agent to retrieve proposals for a given transaction.
-    Requires a valid access token with the "consumer:read" scope.
+    Polls the broker for proposals for a given transaction ID.
+    Returns the list of proposals.
     """
     scopes = SCOPES_MAP.get(agent_id, [])
     if "consumer:read" not in scopes:
