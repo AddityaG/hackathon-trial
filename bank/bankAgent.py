@@ -13,7 +13,7 @@ CLIENT_SECRET = "bank_secret_a"
 # Broker API endpoints
 BROKER_BASE_URL = "http://127.0.0.1:8000"
 TOKEN_URL = f"{BROKER_BASE_URL}/token"
-GET_INTENTS_URL = f"{BROKER_BASE_URL}/get_intents" # This endpoint is not yet implemented in the Broker, but we will assume it exists for now.
+GET_INTENTS_URL = f"{BROKER_BASE_URL}/get_intents"
 SUBMIT_PROPOSAL_URL = f"{BROKER_BASE_URL}/submit_proposal"
 
 
@@ -103,29 +103,32 @@ def main():
         print("Could not get access token. Exiting.")
         return
 
-    # In a real system, the broker would have a webhook or streaming API.
-    # For this hackathon, we will simulate a "polling" mechanism.
     print("Agent is running and waiting for new intents...")
     
-    # We will simulate a new intent received from the broker
-    # The `main.py` script doesn't have a GET /get_intents endpoint,
-    # so we'll just process a hard-coded sample for demonstration.
-    
-    sample_intent = {
-        "transaction_id": "txn_123",
-        "amount": 5000.0,
-        "duration_months": 12,
-        "credit_score": "good",
-        "client_id": "consumer_agent_1"
-    }
-    
-    # Process the sample intent and get a proposal
-    proposal = process_intent(sample_intent)
-    
-    # If a proposal was generated, submit it to the broker
-    if proposal:
-        submit_proposal(access_token, proposal)
-    
+    while True:
+        try:
+            headers = {"Authorization": f"Bearer {access_token}"}
+            response = requests.get(GET_INTENTS_URL, headers=headers)
+            response.raise_for_status()
+            intents = response.json()
+            
+            if intents:
+                print(f"Found {len(intents)} new intents. Processing...")
+                for intent in intents:
+                    proposal = process_intent(intent)
+                    if proposal:
+                        submit_proposal(access_token, proposal)
+            else:
+                print("No new intents found. Polling again in 5 seconds...")
+                
+            time.sleep(5) # Poll every 5 seconds
+            
+        except requests.exceptions.RequestException as e:
+            print(f"An error occurred while communicating with the broker: {e}")
+            print("Attempting to get a new token and retry in 10 seconds.")
+            access_token = get_access_token()
+            time.sleep(10)
+
 
 if __name__ == "__main__":
     main()
