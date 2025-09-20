@@ -15,6 +15,7 @@ BROKER_BASE_URL = "http://127.0.0.1:8000"
 TOKEN_URL = f"{BROKER_BASE_URL}/token"
 SUBMIT_INTENT_URL = f"{BROKER_BASE_URL}/submit_intent"
 GET_PROPOSALS_URL = f"{BROKER_BASE_URL}/get_proposals"
+ACCEPT_PROPOSAL_URL = f"{BROKER_BASE_URL}/accept_proposal"
 
 
 def get_access_token() -> str:
@@ -79,6 +80,36 @@ def get_proposals(access_token: str, transaction_id: str) -> Dict[str, Any]:
         return {}
 
 
+def accept_best_proposal(access_token: str, transaction_id: str, proposals: List[Dict[str, Any]]):
+    """
+    Selects the best proposal based on the lowest interest rate
+    and sends an acceptance message to the broker.
+    """
+    if not proposals:
+        print("No proposals to accept.")
+        return
+
+    # Find the proposal with the lowest interest rate
+    best_offer = min(proposals, key=lambda x: x['interest_rate'])
+    
+    # Send the acceptance message to the broker
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+    try:
+        response = requests.post(f"{ACCEPT_PROPOSAL_URL}/{transaction_id}?proposal_id={best_offer['proposal_id']}", headers=headers)
+        response.raise_for_status()
+        
+        print("\n--- Decision Made ---")
+        print(f"Accepted proposal from Bank: {best_offer['bank_id']}")
+        print(f"Interest Rate: {best_offer['interest_rate'] * 100}%")
+        print(f"Terms: {best_offer['terms']}")
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to accept proposal: {e}")
+
+
 def main():
     """Main function to run the Consumer Agent logic."""
     print("Consumer Agent starting...")
@@ -102,11 +133,12 @@ def main():
     print("\nWaiting for proposals from Bank Agents...")
     proposals = []
     retries = 0
-    while not proposals and retries < 10:
+    max_retries = 10
+    while not proposals and retries < max_retries:
         time.sleep(2)  # Wait 2 seconds before polling again
         proposals = get_proposals(access_token, transaction_id)
         if proposals:
-            print("\nProposals received!")
+            print(f"\nProposals received! Found {len(proposals)} proposals.")
             print(json.dumps(proposals, indent=2))
             break
         else:
@@ -114,19 +146,11 @@ def main():
         retries += 1
     
     if not proposals:
-        print("No proposals received. Exiting.")
+        print(f"\nNo proposals received after {max_retries} attempts. Exiting.")
         return
         
-    # --- Decision Logic ---
-    # In a full LLM-powered agent, this is where the LLM would analyze and compare offers.
-    # For now, we'll use a simple logic to find the best offer.
-    best_offer = None
-    if proposals:
-        best_offer = min(proposals, key=lambda x: x['interest_rate'])
-        print("\n--- Best Offer ---")
-        print(f"Bank: {best_offer['bank_id']}")
-        print(f"Interest Rate: {best_offer['interest_rate'] * 100}%")
-        print(f"Terms: {best_offer['terms']}")
+    # Accept the best proposal found
+    accept_best_proposal(access_token, transaction_id, proposals)
 
 
 if __name__ == "__main__":
