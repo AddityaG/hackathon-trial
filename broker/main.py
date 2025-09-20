@@ -15,6 +15,7 @@ from agent_credentials import AGENT_CREDENTIALS, SCOPES_MAP
 # In a production app, this would be a persistent database (e.g., Firestore)
 intents_db: Dict[str, Any] = {}
 proposals_db: Dict[str, Any] = {}
+accepted_proposals: Dict[str, str] = {}
 
 
 class Token(BaseModel):
@@ -112,6 +113,10 @@ async def submit_intent(intent: Intent, agent_id: str = Depends(get_current_agen
     if "consumer:write" not in scopes:
         raise HTTPException(status_code=403, detail="Not authorized to submit intents")
     
+    # Check if a proposal has already been accepted for this transaction ID
+    if intent.transaction_id in accepted_proposals:
+        raise HTTPException(status_code=409, detail="Transaction already accepted")
+    
     # Store the intent in our in-memory DB
     intents_db[intent.transaction_id] = intent.model_dump()
     proposals_db[intent.transaction_id] = [] # Initialize proposals for this intent
@@ -122,13 +127,18 @@ async def submit_intent(intent: Intent, agent_id: str = Depends(get_current_agen
 async def get_intents(agent_id: str = Depends(get_current_agent_id)):
     """
     Endpoint for a Bank Agent to poll for new loan intents.
-    Returns a list of all intents that have been submitted.
+    Returns a list of all intents that have been submitted and not yet fulfilled.
     """
     scopes = SCOPES_MAP.get(agent_id, [])
     if "bank:read" not in scopes:
         raise HTTPException(status_code=403, detail="Not authorized to read intents")
+    
+    # Only return intents that have not yet been accepted
+    unfulfilled_intents = [
+        intent for intent in intents_db.values() if intent["transaction_id"] not in accepted_proposals
+    ]
         
-    return list(intents_db.values())
+    return unfulfilled_intents
 
 
 @app.post("/submit_proposal", tags=["Agent Protocol"])
@@ -144,6 +154,10 @@ async def submit_proposal(proposal: Proposal, agent_id: str = Depends(get_curren
     transaction_id = proposal.transaction_id
     if transaction_id not in proposals_db:
         raise HTTPException(status_code=404, detail="Transaction ID not found")
+        
+    # Check if a proposal has already been accepted for this transaction ID
+    if transaction_id in accepted_proposals:
+        raise HTTPException(status_code=409, detail="Transaction already accepted")
         
     proposals_db[transaction_id].append(proposal.model_dump())
     
@@ -165,6 +179,45 @@ async def get_proposals(transaction_id: str, agent_id: str = Depends(get_current
         
     return proposals_db[transaction_id]
 
-# The remaining logic (acceptance/rejection) will be built in later steps.
 
-# To run the app, use: uvicorn main:app --reload
+@app.post("/accept_proposal/{transaction_id}", tags=["Agent Protocol"])
+async def accept_proposal(
+    transaction_id: str,
+    proposal_id: str = Query(...),
+    agent_id: str = Depends(get_current_agent_id)
+):
+    """
+    Endpoint for a Consumer Agent to accept a specific loan proposal.
+    Requires a valid access token with the "consumer:write" scope.
+    """
+    scopes = SCOPES_MAP.get(agent_id, [])
+    if "consumer:write" not in scopes:
+        raise HTTPException(status_code=403, detail="Not authorized to accept proposals")
+    
+    # Check if the transaction exists
+    if transaction_id not in proposals_db:
+        raise HTTPException(status_code=404, detail="Transaction ID not found")
+        
+    # Check if the proposal has already been accepted
+    if transaction_id in accepted_proposals:
+        raise HTTPException(status_code=409, detail="Transaction has already been accepted")
+        
+    # Find the proposal
+    proposal_found = None
+    for proposal in proposals_db[transaction_id]:
+        if proposal["proposal_id"] == proposal_id:
+            proposal_found = proposal
+            break
+            
+    if not proposal_found:
+        raise HTTPException(status_code=404, detail="Proposal not found for this transaction")
+        
+    # Mark the proposal as accepted in our database
+    accepted_proposals[transaction_id] = proposal_found["bank_id"]
+    
+    return {
+        "status": "Proposal accepted",
+        "transaction_id": transaction_id,
+        "proposal_id": proposal_id,
+        "accepted_by_bank_id": proposal_found["bank_id"]
+    }
